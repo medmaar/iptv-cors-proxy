@@ -1,0 +1,49 @@
+name: Deploy CORS Proxy Worker
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Deploy to Cloudflare Workers
+        run: |
+          RESULT=$(curl -s -X PUT \
+            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.ACCOUNT_ID }}/workers/scripts/iptv-cors-proxy" \
+            -H "Authorization: Bearer ${{ secrets.CF_TOKEN }}" \
+            -F 'metadata={"main_module":"worker.js","compatibility_date":"2024-01-01"};type=application/json' \
+            -F "worker.js=@worker.js;type=application/javascript+module")
+          echo "$RESULT" | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          if d.get('success'):
+              print('Deployed OK:', d['result'].get('id','?'))
+          else:
+              print('Error:', json.dumps(d.get('errors')))
+              exit(1)
+          "
+
+      - name: Enable workers.dev subdomain
+        run: |
+          curl -s -X POST \
+            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.ACCOUNT_ID }}/workers/scripts/iptv-cors-proxy/subdomain" \
+            -H "Authorization: Bearer ${{ secrets.CF_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{"enabled": true}' | python3 -c "
+          import sys, json
+          d = json.load(sys.stdin)
+          print('Subdomain enabled:', d.get('success', False))
+          "
+
+      - name: Print worker URL
+        run: |
+          RESULT=$(curl -s \
+            "https://api.cloudflare.com/client/v4/accounts/${{ secrets.ACCOUNT_ID }}/workers/subdomain" \
+            -H "Authorization: Bearer ${{ secrets.CF_TOKEN }}")
+          SUBDOMAIN=$(echo "$RESULT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('result',{}).get('subdomain','UNKNOWN'))")
+          echo "Worker URL: https://iptv-cors-proxy.${SUBDOMAIN}.workers.dev"
